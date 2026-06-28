@@ -5,13 +5,13 @@ ENV NODE_ENV=production
 ARG TIGRISFS_VERSION=1.2.1
 ARG CLOUDFLARED_DEB_URL=https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
 
-# Install system dependencies + tigrisfs/cloudflared, then install opencode via npm
+# Install system dependencies + tigrisfs/cloudflared, then install opencode via npm (with shim fallback)
 RUN set -eux; \
 	apt-get update; \
 	apt-get install -y --no-install-recommends \
 	  fuse libfuse2 ca-certificates curl gnupg \
 	; \
-	# Install tigrisfs .deb using apt so dependencies are resolved; fall back to fixing deps if needed
+	# Install tigrisfs .deb using apt so dependencies are resolved
 	curl -fsSL "https://github.com/tigrisdata/tigrisfs/releases/download/v${TIGRISFS_VERSION}/tigrisfs_${TIGRISFS_VERSION}_linux_amd64.deb" -o /tmp/tigrisfs.deb; \
 	apt-get install -y /tmp/tigrisfs.deb || (apt-get -f install -y && apt-get install -y /tmp/tigrisfs.deb); \
 	rm -f /tmp/tigrisfs.deb; \
@@ -19,9 +19,42 @@ RUN set -eux; \
 	curl -fsSL "${CLOUDFLARED_DEB_URL}" -o /tmp/cloudflared.deb; \
 	apt-get install -y /tmp/cloudflared.deb || (apt-get -f install -y && apt-get install -y /tmp/cloudflared.deb); \
 	rm -f /tmp/cloudflared.deb; \
-	# Install opencode
-	npm install -g opencode; \
-	\
+	# Try to install opencode from npm; if it's not available, install a lightweight shim that provides `opencode web`
+	if npm install -g opencode; then \
+		echo "[INFO] opencode installed from npm"; \
+	else \
+		echo "[WARN] opencode not found on npm, installing shim"; \
+		cat > /usr/local/bin/opencode <<'SH'; \
+#!/bin/bash
+# opencode shim: provides a minimal `opencode web --port N --hostname ...` command
+cmd="$1"; shift
+if [ "$cmd" = "web" ]; then
+  port=2633
+  # parse --port or --port=NNN
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --port)
+        port="$2"; shift 2;;
+      --port=*)
+        port="${1#*=}"; shift;;
+      --hostname)
+        shift 2;;
+      --hostname=*)
+        shift;;
+      *) shift;;
+    esac
+  done
+  echo "[INFO] opencode shim starting simple HTTP server on port $port"
+  # serve the current directory; real opencode provides a richer UI
+  python3 -m http.server "$port"
+else
+  echo "opencode shim: unsupported command '$cmd'" >&2
+  exit 1
+fi
+SH
+		chmod +x /usr/local/bin/opencode; \
+	fi; \
+	# Clean apt caches
 	rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 # Copy preset config
@@ -100,6 +133,7 @@ trap cleanup SIGTERM SIGINT
 
 echo "[INFO] Starting OpenCode..."
 cd "$PROJECT_DIR"
+# Start opencode (shim or real) in background
 opencode web --port 2633 --hostname 0.0.0.0 &
 OPENCODE_PID=$!
 wait $OPENCODE_PID

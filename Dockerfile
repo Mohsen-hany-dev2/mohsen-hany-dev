@@ -9,18 +9,17 @@ ARG CLOUDFLARED_DEB_URL=https://github.com/cloudflare/cloudflared/releases/lates
 RUN set -eux; \
 	apt-get update; \
 	apt-get install -y --no-install-recommends \
-	  fuse \
-	  ca-certificates \
-	  curl; \
-	\
+	  fuse libfuse2 ca-certificates curl gnupg \
+	; \
+	# Install tigrisfs .deb using apt so dependencies are resolved; fall back to fixing deps if needed
 	curl -fsSL "https://github.com/tigrisdata/tigrisfs/releases/download/v${TIGRISFS_VERSION}/tigrisfs_${TIGRISFS_VERSION}_linux_amd64.deb" -o /tmp/tigrisfs.deb; \
-	dpkg -i /tmp/tigrisfs.deb; \
+	apt-get install -y /tmp/tigrisfs.deb || (apt-get -f install -y && apt-get install -y /tmp/tigrisfs.deb); \
 	rm -f /tmp/tigrisfs.deb; \
-	\
+	# Install cloudflared .deb similarly
 	curl -fsSL "${CLOUDFLARED_DEB_URL}" -o /tmp/cloudflared.deb; \
-	dpkg -i /tmp/cloudflared.deb; \
+	apt-get install -y /tmp/cloudflared.deb || (apt-get -f install -y && apt-get install -y /tmp/cloudflared.deb); \
 	rm -f /tmp/cloudflared.deb; \
-	\
+	# Install opencode
 	npm install -g opencode; \
 	\
 	rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
